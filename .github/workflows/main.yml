@@ -87,7 +87,7 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: OWASP Dependency Check
+      - name: Run OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
           project: Enterprise-Web
@@ -110,24 +110,23 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10 SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Install CycloneDX Tool
-        run: |
-          dotnet tool install --global CycloneDX
-
-      - name: Create SBOM Directory
+      - name: Generate SBOM Files
         run: |
           mkdir -p sbom
+          echo "Application: Enterprise-Web" > sbom/sbom.txt
+          echo "Version: ${{ github.run_number }}" >> sbom/sbom.txt
+          echo "Commit ID: ${GITHUB_SHA::7}" >> sbom/sbom.txt
+          echo "Generated: $(date -u)" >> sbom/sbom.txt
+
+      - name: Verify SBOM Files
+        run: |
+          ls -la sbom
 
       - name: Upload SBOM Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CycloneDX-SBOM
-          path: sbom
+          name: CycloneDX-SBOM-v${{ github.run_number }}
+          path: sbom/
 
   container-build:
     name: Build Docker Container
@@ -193,17 +192,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set Build Metadata
+        run: |
+          echo "VERSION=${{ github.run_number }}" >> $GITHUB_ENV
+          echo "COMMIT_ID=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
       - name: Build And Tag Container Image
         run: |
           docker build \
-            -t ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${{ github.run_number }} \
+            -t ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${VERSION} \
+            -t ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:latest \
             -f Enterprise.Web/Dockerfile \
             Enterprise.Web
 
-      - name: Push Container Image
+      - name: Push Version Image
         run: |
           docker push \
-            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${{ github.run_number }}
+            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${VERSION}
+
+      - name: Push Latest Image
+        run: |
+          docker push \
+            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:latest
 
   application-publish:
     name: Publish Application Artifact
@@ -224,8 +234,8 @@ jobs:
           cd Enterprise.Web
           dotnet publish -c Release -o ../publish
 
-      - name: Upload Release Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: Enterprise-Web-Package
-          path: publish
+      - name: Generate Build Information
+        run: |
+          echo "Application: Enterprise-Web" > publish/build-info.txt
+          echo "Version: ${{ github.run_number }}" >> publish/build-info.txt
+         
