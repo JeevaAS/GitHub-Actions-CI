@@ -15,38 +15,49 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore
-        run: dotnet restore src/Enterprise.Web/Enterprise.Web.csproj
+      - name: Restore Packages
+        run: |
+          cd Enterprise.Web
+          dotnet restore
 
-      - name: Build
-        run: dotnet build src/Enterprise.Web/Enterprise.Web.csproj --configuration Release --no-restore
+      - name: Build Application
+        run: |
+          cd Enterprise.Web
+          dotnet build --configuration Release --no-restore
 
   test:
     runs-on: ubuntu-latest
     needs: build
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Run Tests
-        run: dotnet test src/Enterprise.Web/Enterprise.Web.csproj --configuration Release
+      - name: Run Unit Tests
+        run: |
+          cd Enterprise.Web
+          dotnet test --configuration Release
 
   sonar:
     runs-on: ubuntu-latest
     needs: test
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -58,29 +69,28 @@ jobs:
           args: >
             -Dsonar.projectKey=GitHub-Actions-CI
             -Dsonar.organization=jeevaas
-            -Dsonar.sources=src/Enterprise.Web
+            -Dsonar.sources=Enterprise.Web
 
   sbom:
     runs-on: ubuntu-latest
     needs: sonar
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Install CycloneDX
-        run: dotnet tool install --global CycloneDX
-
       - name: Generate SBOM
         run: |
-          ~/.dotnet/tools/dotnet-CycloneDX \
-          src/Enterprise.Web/Enterprise.Web.csproj \
-          -o sbom
+          dotnet tool install --global CycloneDX
+          mkdir -p sbom
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload SBOM Folder
+        uses: actions/upload-artifact@v4
         with:
           name: cyclonedx-sbom
           path: sbom
@@ -90,38 +100,39 @@ jobs:
     needs: sbom
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-      - name: Docker Build
+      - name: Build Docker Image
         run: |
           docker build \
-          -t enterprise-web:${{ github.run_number }} \
-          -f src/Enterprise.Web/Dockerfile \
-          src/Enterprise.Web
+            -t enterprise-web:${{ github.run_number }} \
+            -f Enterprise.Web/Dockerfile \
+            Enterprise.Web
 
-      - name: Verify Image
+      - name: List Docker Images
         run: docker images
 
   publish:
     runs-on: ubuntu-latest
     needs: docker
-    if: always()
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Publish
+      - name: Publish Application
         run: |
-          dotnet publish \
-          src/Enterprise.Web/Enterprise.Web.csproj \
-          -c Release \
-          -o publish
+          cd Enterprise.Web
+          dotnet publish -c Release -o ../publish
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: dotnet-app
           path: publish
