@@ -10,60 +10,101 @@ on:
       - main
 
 jobs:
-  build-test-security:
 
+  checkout-build:
+    name: Build
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-    # Step 1 - Checkout
-    - name: Checkout Source Code
-      uses: actions/checkout@v4
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
 
-    # Step 2 - Install .NET
-    - name: Setup .NET 8
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
+      - name: Restore NuGet Packages
+        run: dotnet restore
 
-    # Step 3 - Restore Dependencies
-    - name: Restore NuGet Packages
-      run: dotnet restore
+      - name: Build Application
+        run: dotnet build --configuration Release --no-restore
 
-    # Step 4 - Build Application
-    - name: Build Application
-      run: dotnet build --configuration Release --no-restore
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: checkout-build
 
-    # Step 5 - Run Unit Tests
-    - name: Execute Unit Tests
-      run: dotnet test --configuration Release --no-build
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
-    # Step 6 - Verify Sonar Configuration
-    - name: Verify Sonar Properties
-      run: |
-        ls -la
-        cat sonar-project.properties
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
 
-    # Step 7 - SonarCloud Scan
-    - name: SonarCloud Analysis
-      uses: SonarSource/sonarqube-scan-action@v5
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Restore NuGet Packages
+        run: dotnet restore
 
-    # Step 8 - Sonar Quality Gate
-    - name: SonarCloud Quality Gate
-      uses: SonarSource/sonarqube-quality-gate-action@master
-      timeout-minutes: 5
-      env:
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Execute Unit Tests
+        run: dotnet test --configuration Release
 
-    # Step 9 - Publish Build Artifact
-    - name: Publish Application
-      run: dotnet publish -c Release -o publish
+  sonar-analysis:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    needs: unit-tests
 
-    # Step 10 - Upload Artifact
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: dotnet-app
-        path: publish/
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Analysis
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=YOUR_PROJECT_KEY
+            -Dsonar.organization=YOUR_ORGANIZATION
+            -Dsonar.sources=.
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: sonar-analysis
+
+    steps:
+      - name: SonarCloud Quality Gate
+        uses: SonarSource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  publish:
+    name: Publish Artifact
+    runs-on: ubuntu-latest
+    needs: quality-gate
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore Packages
+        run: dotnet restore
+
+      - name: Publish Application
+        run: dotnet publish -c Release -o publish
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-app
+          path: publish/
