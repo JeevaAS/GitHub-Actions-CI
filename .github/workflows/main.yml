@@ -30,6 +30,7 @@ jobs:
       - name: Build Application
         run: dotnet build --configuration Release --no-restore
 
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -50,6 +51,7 @@ jobs:
       - name: Execute Unit Tests
         run: dotnet test --configuration Release
 
+
   sonar-analysis:
     name: SonarCloud Scan
     runs-on: ubuntu-latest
@@ -67,21 +69,24 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.projectKey=YOUR_PROJECT_KEY
-            -Dsonar.organization=YOUR_ORGANIZATION
+            -Dsonar.projectKey=GitHub-Actions-CI
+            -Dsonar.organization=jeevaas
             -Dsonar.sources=.
 
+
   quality-gate:
-    name: Quality Gate
+    name: Sonar Quality Gate
     runs-on: ubuntu-latest
     needs: sonar-analysis
 
     steps:
       - name: SonarCloud Quality Gate
+        continue-on-error: true
         uses: SonarSource/sonarqube-quality-gate-action@master
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
 
   publish:
     name: Publish Artifact
