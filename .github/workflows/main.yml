@@ -11,88 +11,9 @@ on:
 
 jobs:
 
-  checkout-build:
+  build:
     name: Build
     runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Restore NuGet Packages
-        run: dotnet restore
-
-      - name: Build Application
-        run: dotnet build --configuration Release --no-restore
-
-
-  unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    needs: checkout-build
-
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Restore NuGet Packages
-        run: dotnet restore
-
-      - name: Execute Unit Tests
-        run: dotnet test --configuration Release
-
-
-  sonar-analysis:
-    name: SonarCloud Scan
-    runs-on: ubuntu-latest
-    needs: unit-tests
-
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: SonarCloud Analysis
-        uses: SonarSource/sonarqube-scan-action@v5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args: >
-            -Dsonar.projectKey=GitHub-Actions-CI
-            -Dsonar.organization=jeevaas
-            -Dsonar.sources=.
-
-
-  quality-gate:
-    name: Sonar Quality Gate
-    runs-on: ubuntu-latest
-    needs: sonar-analysis
-    continue-on-error: true
-
-    steps:
-      - name: SonarCloud Quality Gate
-        uses: SonarSource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-
-  publish:
-    name: Publish Artifact
-    runs-on: ubuntu-latest
-    needs: quality-gate
-    if: always()
 
     steps:
       - name: Checkout Source Code
@@ -106,11 +27,119 @@ jobs:
       - name: Restore Packages
         run: dotnet restore
 
-      - name: Publish Application
-        run: dotnet publish -c Release -o publish
+      - name: Build Application
+        run: dotnet build --configuration Release --no-restore
 
-      - name: Upload Artifact
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore Packages
+        run: dotnet restore
+
+      - name: Run Unit Tests
+        run: dotnet test --configuration Release
+
+
+  sonar-analysis:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=GitHub-Actions-CI
+            -Dsonar.organization=jeevaas
+            -Dsonar.sources=.
+
+      - name: SonarCloud Quality Gate
+        continue-on-error: true
+        uses: SonarSource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+
+  sbom:
+    name: CycloneDX SBOM
+    runs-on: ubuntu-latest
+    needs: sonar-analysis
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Install CycloneDX Tool
+        run: |
+          dotnet tool install --global CycloneDX
+
+      - name: Generate SBOM
+        run: |
+          ~/.dotnet/tools/dotnet-CycloneDX Enterprise.Web/Enterprise.Web.csproj -o sbom
+
+      - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
-          name: dotnet-app
-          path: publish/
+          name: cyclonedx-sbom
+          path: sbom/
+
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: sbom
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t enterprise-web:${{ github.run_number }} \
+            -f Enterprise.Web/Dockerfile .
+
+
+  publish:
+    name: Publish Artifact
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: always()
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore Packages
+       
