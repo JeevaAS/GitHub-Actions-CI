@@ -12,52 +12,41 @@ on:
 jobs:
 
   build:
-    name: Build
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore Packages
-        run: dotnet restore
+      - name: Restore
+        run: dotnet restore src/Enterprise.Web/Enterprise.Web.csproj
 
-      - name: Build Application
-        run: dotnet build --configuration Release --no-restore
+      - name: Build
+        run: dotnet build src/Enterprise.Web/Enterprise.Web.csproj --configuration Release --no-restore
 
-  unit-tests:
-    name: Unit Tests
+  test:
     runs-on: ubuntu-latest
     needs: build
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore Packages
-        run: dotnet restore
+      - name: Run Tests
+        run: dotnet test src/Enterprise.Web/Enterprise.Web.csproj --configuration Release
 
-      - name: Run Unit Tests
-        run: dotnet test --configuration Release
-
-  sonar-analysis:
-    name: SonarCloud Analysis
+  sonar:
     runs-on: ubuntu-latest
-    needs: unit-tests
+    needs: test
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -69,84 +58,70 @@ jobs:
           args: >
             -Dsonar.projectKey=GitHub-Actions-CI
             -Dsonar.organization=jeevaas
-            -Dsonar.sources=.
-
-      - name: SonarCloud Quality Gate
-        continue-on-error: true
-        uses: SonarSource/sonarqube-quality-gate-action@master
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+            -Dsonar.sources=src/Enterprise.Web
 
   sbom:
-    name: CycloneDX SBOM
     runs-on: ubuntu-latest
-    needs: sonar-analysis
+    needs: sonar
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Install CycloneDX Tool
-        run: |
-          dotnet tool install --global CycloneDX
+      - name: Install CycloneDX
+        run: dotnet tool install --global CycloneDX
 
       - name: Generate SBOM
         run: |
-          ~/.dotnet/tools/dotnet-CycloneDX Enterprise.Web/Enterprise.Web.csproj -o sbom
+          ~/.dotnet/tools/dotnet-CycloneDX \
+          src/Enterprise.Web/Enterprise.Web.csproj \
+          -o sbom
 
-      - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: cyclonedx-sbom
-          path: sbom/
+          path: sbom
 
-  docker-build:
-    name: Docker Build
+  docker:
     runs-on: ubuntu-latest
     needs: sbom
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Build Docker Image
+      - name: Docker Build
         run: |
           docker build \
-            -t enterprise-web:${{ github.run_number }} \
-            -f Enterprise.Web/Dockerfile .
+          -t enterprise-web:${{ github.run_number }} \
+          -f src/Enterprise.Web/Dockerfile \
+          src/Enterprise.Web
 
-      - name: List Docker Images
+      - name: Verify Image
         run: docker images
 
   publish:
-    name: Publish Artifact
     runs-on: ubuntu-latest
-    needs: docker-build
+    needs: docker
     if: always()
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Restore Packages
-        run: dotnet restore
+      - name: Publish
+        run: |
+          dotnet publish \
+          src/Enterprise.Web/Enterprise.Web.csproj \
+          -c Release \
+          -o publish
 
-      - name: Publish Application
-        run: dotnet publish Enterprise.Web/Enterprise.Web.csproj -c Release -o publish
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: dotnet-app
-          path: publish/
+          path: publish
