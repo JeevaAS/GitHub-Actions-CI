@@ -15,9 +15,33 @@ permissions:
 
 jobs:
 
-  source-build:
-    name: Build & Compile Application
+  prerequisites:
+    name: Pipeline Prerequisites
     runs-on: ubuntu-latest
+
+    outputs:
+      severity: ${{ steps.config.outputs.severity }}
+
+    steps:
+      - name: Set Scan Configuration
+        id: config
+        run: |
+          echo "severity=HIGH,CRITICAL" >> $GITHUB_OUTPUT
+
+      - name: Display Configuration
+        run: |
+          echo "======================================="
+          echo "Repository : ${{ github.repository }}"
+          echo "Branch     : ${{ github.ref_name }}"
+          echo "Build No   : ${{ github.run_number }}"
+          echo "Commit ID  : ${GITHUB_SHA::7}"
+          echo "Severity   : HIGH,CRITICAL"
+          echo "======================================="
+
+  build-test-publish:
+    name: Build Test Publish Application
+    runs-on: ubuntu-latest
+    needs: prerequisites
 
     steps:
       - name: Checkout Source Code
@@ -33,34 +57,33 @@ jobs:
           cd Enterprise.Web
           dotnet restore
 
-      - name: Build Application
+      - name: Execute Unit Tests
         run: |
           cd Enterprise.Web
-          dotnet build --configuration Release --no-restore
+          dotnet test --configuration Release --no-restore
 
-  unit-testing:
-    name: Execute Unit Tests
-    runs-on: ubuntu-latest
-    needs: source-build
+      - name: Publish Application
+        run: |
+          cd Enterprise.Web
+          dotnet publish -c Release --no-restore -o ../publish
 
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - name: Generate Build Information
+        run: |
+          echo "Application: Enterprise-Web" > publish/build-info.txt
+          echo "Version: ${{ github.run_number }}" >> publish/build-info.txt
+          echo "Commit ID: ${GITHUB_SHA::7}" >> publish/build-info.txt
+          echo "Generated: $(date -u)" >> publish/build-info.txt
 
-      - name: Setup .NET 10 SDK
-        uses: actions/setup-dotnet@v4
+      - name: Upload Application Artifact
+        uses: actions/upload-artifact@v4
         with:
-          dotnet-version: 10.0.x
-
-      - name: Execute Test Suite
-        run: |
-          cd Enterprise.Web
-          dotnet test --configuration Release
+          name: app-package
+          path: publish/
 
   sast-analysis:
     name: SonarCloud SAST Analysis
     runs-on: ubuntu-latest
-    needs: unit-testing
+    needs: build-test-publish
 
     steps:
       - name: Checkout Source Code
@@ -107,20 +130,13 @@ jobs:
     needs: dependency-analysis
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Generate SBOM Files
+      - name: Generate SBOM
         run: |
           mkdir -p sbom
           echo "Application: Enterprise-Web" > sbom/sbom.txt
           echo "Version: ${{ github.run_number }}" >> sbom/sbom.txt
           echo "Commit ID: ${GITHUB_SHA::7}" >> sbom/sbom.txt
           echo "Generated: $(date -u)" >> sbom/sbom.txt
-
-      - name: Verify SBOM Files
-        run: |
-          ls -la sbom
 
       - name: Upload SBOM Artifact
         uses: actions/upload-artifact@v4
@@ -137,39 +153,68 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Download Application Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          path: publish
+
       - name: Build Docker Image
         run: |
           docker build \
             -t enterprise-web:${{ github.run_number }} \
-            -f Enterprise.Web/Dockerfile \
-            Enterprise.Web
+            -f Enterprise.Web/Dockerfile .
 
-      - name: Verify Docker Image
-        run: docker images
+      - name: Save Docker Image
+        run: |
+          docker save \
+            enterprise-web:${{ github.run_number }} \
+            -o image.tar
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
 
   container-security-scan:
     name: Trivy Container Security Scan
     runs-on: ubuntu-latest
-    needs: container-build
+
+    needs:
+      - container-build
+      - prerequisites
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
 
-      - name: Build Docker Image
-        run: |
-          docker build \
-            -t enterprise-web:${{ github.run_number }} \
-            -f Enterprise.Web/Dockerfile \
-            Enterprise.Web
+      - name: Load Docker Image
+        run: docker load -i image.tar
 
       - name: Run Trivy Security Scan
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: enterprise-web:${{ github.run_number }}
           format: table
-          severity: CRITICAL,HIGH
+          severity: ${{ needs.prerequisites.outputs.severity }}
           exit-code: 0
+
+      - name: Generate Trivy SARIF Report
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: enterprise-web:${{ github.run_number }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: ${{ needs.prerequisites.outputs.severity }}
+
+      - name: Upload Trivy Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: Trivy-Report
+          path: trivy-results.sarif
 
   container-registry:
     name: Publish Container To GHCR
@@ -177,13 +222,18 @@ jobs:
     needs: container-security-scan
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
       - name: Convert Repository Owner To Lowercase
         id: owner
         run: |
           echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+      - name: Download Docker Image Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: docker load -i image.tar
 
       - name: Login To GitHub Container Registry
         uses: docker/login-action@v3
@@ -192,50 +242,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set Build Metadata
+      - name: Tag Image
         run: |
-          echo "VERSION=${{ github.run_number }}" >> $GITHUB_ENV
-          echo "COMMIT_ID=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          docker tag \
+            enterprise-web:${{ github.run_number }} \
+            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${{ github.run_number }}
 
-      - name: Build And Tag Container Image
-        run: |
-          docker build \
-            -t ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${VERSION} \
-            -t ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:latest \
-            -f Enterprise.Web/Dockerfile \
-            Enterprise.Web
+          docker tag \
+            enterprise-web:${{ github.run_number }} \
+            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:latest
 
       - name: Push Version Image
         run: |
           docker push \
-            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${VERSION}
+            ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:${{ github.run_number }}
 
       - name: Push Latest Image
         run: |
           docker push \
             ghcr.io/${{ steps.owner.outputs.owner }}/enterprise-web:latest
-
-  application-publish:
-    name: Publish Application Artifact
-    runs-on: ubuntu-latest
-    needs: container-registry
-
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET 10 SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Publish Application
-        run: |
-          cd Enterprise.Web
-          dotnet publish -c Release -o ../publish
-
-      - name: Generate Build Information
-        run: |
-          echo "Application: Enterprise-Web" > publish/build-info.txt
-          echo "Version: ${{ github.run_number }}" >> publish/build-info.txt
-         
