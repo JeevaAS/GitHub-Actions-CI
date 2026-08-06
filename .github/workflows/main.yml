@@ -203,20 +203,20 @@ jobs:
           severity: ${{ needs.prerequisites.outputs.severity }}
           exit-code: 0
 
-      - name: Generate Trivy HTML Report
+      - name: Generate Trivy JSON Report
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: enterprise-web:${{ github.run_number }}
-          format: template
-          template: "@contrib/html.tpl"
-          output: trivy-report.html
+          format: json
+          output: trivy-report.json
           severity: ${{ needs.prerequisites.outputs.severity }}
+          exit-code: 0
 
       - name: Upload Trivy Report
         uses: actions/upload-artifact@v4
         with:
-          name: Trivy-HTML-Report
-          path: trivy-report.html
+          name: Trivy-Report
+          path: trivy-report.json
 
   container-registry:
     name: Publish Container To GHCR
